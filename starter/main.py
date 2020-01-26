@@ -1,2 +1,2 @@
-from wifi_clock_starter import WifiClock
-wificlock = WifiClock()
+from atlas import Atlas
+atlas = Atlas()

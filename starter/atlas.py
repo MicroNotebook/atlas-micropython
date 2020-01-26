@@ -1,5 +1,5 @@
 # https://micronote.tech
-# This code is designed specifically for the wifi clock kit.
+# This code is designed specifically for the Atlas kit.
 #
 # Edit button callback functions to change outcome of button presses.
 #
@@ -18,12 +18,12 @@ import time
 import ntptime
 
 _NOOP = 0x0
-_DIGIT0 = 0x3
+_DIGIT0 = 0x1
 _DIGIT1 = 0x2
-_DIGIT2 = 0x1
-_DIGIT3 = 0x6
+_DIGIT2 = 0x3
+_DIGIT3 = 0x4
 _DIGIT4 = 0x5
-_DIGIT5 = 0x4
+_DIGIT5 = 0x6
 _DECODE_MODE = 0x9
 
 _DIGIT_DICT = {
@@ -37,18 +37,17 @@ _DIGIT_DICT = {
 
 _DP = 0x80
 
-_RED_LED_PIN = 12
-_GREEN_LED_PIN = 13
-_BLUE_LED_PIN = 15
+_RED_LED_PIN = 0
+_GREEN_LED_PIN = 4
+_BLUE_LED_PIN = 5
 
-_MODE_BUTTON_PIN = 14
-_INCR_BUTTON_PIN = 2
-_DECR_BUTTON_PIN = 0
+_MODE_BUTTON_PIN = 12
+_INCR_BUTTON_PIN = 10
+_DECR_BUTTON_PIN = 2
 
-_SPI_MOSI_PIN = 5
-_SPI_MISO_PIN = 12
-_SPI_CLK_PIN = 16
-_SPI_CS_PIN = 4
+_SPI_CS_PIN = 15
+
+_BEEPER = 16
 
 _MAX_VALUE_DEC = 999999
 _MIN_VALUE_DEC = -99999
@@ -83,29 +82,99 @@ _HEX_TO_SEG = {
     0xF: 0b1000111,
 }
 
+NOTES = {
+    'C3': 130.8,
+    'CS3': 138.6,
+    'DF3': 138.6,
+    'D3': 146.8,
+    'DS3': 155.6,
+    'EF3': 155.6,
+    'E3': 164.8,
+    'F3': 174.6,
+    'FS3': 185.0,
+    'GF3': 185.0,
+    'G3': 196.0,
+    'GS3': 207.7,
+    'AF3': 207.7,
+    'A3': 220.0,
+    'AS3': 233.1,
+    'BF3': 233.1,
+    'B3': 246.9,
 
-class WifiClock:
+    'C4': 261.6,
+    'CS4': 277.2,
+    'DF4': 277.2,
+    'D4': 293.7,
+    'DS4': 311.1,
+    'EF4': 311.1,
+    'E4': 329.6,
+    'F4': 349.2,
+    'FS4': 370.0,
+    'GF4': 370.0,
+    'G4': 392.0,
+    'GS4': 415.3,
+    'AF4': 415.3,
+    'A4': 440.0,
+    'AS4': 466.2,
+    'BF4': 466.2,
+    'B4': 493.9,
+
+    'C5': 523.3,
+    'CS5': 554.4,
+    'DF5': 554.4,
+    'D5': 587.3,
+    'DS5': 622.3,
+    'EF5': 622.3,
+    'E5': 659.3,
+    'F5': 698.5,
+    'FS5': 740.0,
+    'GF5': 740.0,
+    'G5': 784.0,
+    'GS5': 830.6,
+    'AF5': 830.6,
+    'A5': 880.0,
+    'AS5': 932.3,
+    'BF5': 932.3,
+    'B5': 987.8,
+}
+
+SONGS = {
+    'ode_to_joy': ((NOTES['G3'], 800),(NOTES['G3'], 800),(NOTES['A3'], 800),(NOTES['B3'], 800),(NOTES['B3'], 800),(NOTES['A3'], 800),(NOTES['G3'], 800),(NOTES['FS3'], 800),(NOTES['G3'], 800),(NOTES['B3'], 800),(NOTES['C4'], 800),(NOTES['D4'], 800),(NOTES['D4'], 1200),(NOTES['D4'], 200),(NOTES['D4'], 1600)),
+}
+
+class Atlas:
     def __init__(self):
 
-        # Initialize SPI
-        self._spi = SPI(-1, baudrate=10000000, polarity=1, phase=0, sck=Pin(_SPI_CLK_PIN), mosi=Pin(_SPI_MOSI_PIN), miso=Pin(_SPI_MISO_PIN))
+        
+        #Initialize SPI
+        self._spi = SPI(1, baudrate=10000000, polarity=1, phase=0)
         self._cs = Pin(_SPI_CS_PIN)
         self._cs.init(self._cs.OUT, True)
+        
 
         # Initialize LEDs
         self.red_led = Pin(_RED_LED_PIN, Pin.OUT)
         self.green_led = Pin(_GREEN_LED_PIN, Pin.OUT)
         self.blue_led = Pin(_BLUE_LED_PIN, Pin.OUT)
+        
 
         # Initialize buttons with interrupts
         self.mode_button = Pin(_MODE_BUTTON_PIN, Pin.IN, Pin.PULL_UP)
         self.mode_button.irq(trigger=Pin.IRQ_FALLING, handler=self.mode_button_callback)
+        
+
         self.incr_button = Pin(_INCR_BUTTON_PIN, Pin.IN, Pin.PULL_UP)
         self.incr_button.irq(trigger=Pin.IRQ_FALLING, handler=self.incr_button_callback)
+        
+
         self.decr_button = Pin(_DECR_BUTTON_PIN, Pin.IN, Pin.PULL_UP)
         self.decr_button.irq(trigger=Pin.IRQ_FALLING, handler=self.decr_button_callback)
 
-        # Initialize current number and current decimal points
+        # Initialize beeper
+        self.beeper = Pin(_BEEPER, Pin.OUT)
+        self.beeper_timer = Timer(2)
+ 
+         # Initialize current number and current decimal points
         self.current_num = None
         self.current_dp = 0b000000
 
@@ -175,7 +244,7 @@ class WifiClock:
         for i in range(6):
             self._register(_DIGIT_DICT[i], 0x0F)
 
-        self.current_num = None;
+        self.current_num = None
 
     # Write a decimal value to the display, dp is 6 bit binary value representing where to put decimal points
     def write_num(self, value, dp=0b000000):
@@ -237,6 +306,17 @@ class WifiClock:
     def toggle_led(led):
         led.value(not (led.value()))
 
+    # Play a note
+    def play_note(self, freq, duration):
+        duration_timer = Timer(0)
+        self.beeper_timer.init(freq=freq, mode=Timer.PERIODIC, callback=self.beeper_callback)
+        duration_timer.init(period=duration, mode=Timer.ONE_SHOT, callback=lambda _:self.beeper_timer.deinit())
+
+    # Play a list of lists containing [note, duration]
+    def play_song(self, notes):
+        for note in notes:
+            self.play_note(note[0], note[1])
+    
     # Increment the current number on the display
     def increment_num(self, hex=False):
         if self.current_num is None:
@@ -273,6 +353,10 @@ class WifiClock:
 
                 self.write_num(self.current_num - 1, self.current_dp)
 
+    # Callback for beeper
+    def beeper_callback(self, pin):
+        self.toggle_led(self.beeper)
+
     # Callback for Mode button
     def mode_button_callback(self, pin):
         if self._debounce(self.mode_button):
@@ -281,12 +365,14 @@ class WifiClock:
     # Callback for Incr Button
     def incr_button_callback(self, pin):
         if self._debounce(self.incr_button):
-            self.increment_num()
+            #self.increment_num()
+            self.toggle_led(self.green_led)
 
     # Callback for Decr button
     def decr_button_callback(self, pin):
         if self._debounce(self.decr_button):
-            self.decrement_num()
+            #self.decrement_num()
+            self.toggle_led(self.blue_led)
     
     # Callback for clock after calling start_clock24
     def clock_timer_callback(self, tim):
