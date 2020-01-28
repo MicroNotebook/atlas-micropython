@@ -58,10 +58,11 @@ _MIN_VALUE_DP = 0b000000
 
 _DEBOUNCE_SAMPLES = 32
 
-_INTENSITY = 0xA
-_SCAN_LIMIT = 0xB
-_SHUTDOWN = 0xC
-_DISPLAY_TEST = 0xF
+_DECODE_MODE = const(9)
+_INTENSITY = const(10)
+_SCAN_LIMIT = const(11)
+_SHUTDOWN = const(12)
+_DISPLAY_TEST = const(15)
 
 _HEX_TO_SEG = {
     0x0: 0b1111110,
@@ -144,37 +145,47 @@ SONGS = {
 
 class Atlas:
     def __init__(self):
-
         
-        #Initialize SPI
-        self._spi = SPI(1, baudrate=10000000, polarity=1, phase=0)
-        self._cs = Pin(_SPI_CS_PIN)
-        self._cs.init(self._cs.OUT, True)
-        
-
         # Initialize LEDs
         self.red_led = Pin(_RED_LED_PIN, Pin.OUT)
         self.green_led = Pin(_GREEN_LED_PIN, Pin.OUT)
         self.blue_led = Pin(_BLUE_LED_PIN, Pin.OUT)
+        self.red_led.value(0)
+        self.green_led.value(0)
+        self.blue_led.value(0)
         
-
-        # Initialize buttons with interrupts
+        # Initialize beeper
+        self.beeper = Pin(_BEEPER, Pin.OUT)
+        self.beeper.value(1)
+        self.note_timer = Timer(2)
+        self.note_timer.deinit()
+        
+        # Initialize buttons with pullup resistors
         self.mode_button = Pin(_MODE_BUTTON_PIN, Pin.IN, Pin.PULL_UP)
-        self.mode_button.irq(trigger=Pin.IRQ_FALLING, handler=self.mode_button_callback)
-        
-
         self.incr_button = Pin(_INCR_BUTTON_PIN, Pin.IN, Pin.PULL_UP)
+        self.decr_button = Pin(_DECR_BUTTON_PIN, Pin.IN, Pin.PULL_UP)      
+        #self.mode_button.irq(trigger=Pin.IRQ_FALLING, handler=self.mode_button_callback)
         self.incr_button.irq(trigger=Pin.IRQ_FALLING, handler=self.incr_button_callback)
-        
-
-        self.decr_button = Pin(_DECR_BUTTON_PIN, Pin.IN, Pin.PULL_UP)
         self.decr_button.irq(trigger=Pin.IRQ_FALLING, handler=self.decr_button_callback)
+        
+        # Initialize SPI
+        self._spi = SPI(1, baudrate=10000000, polarity=1, phase=0)
+        self._cs = Pin(_SPI_CS_PIN)
+        self._cs.init(self._cs.OUT, True)
+        
+        self._register(_SHUTDOWN, 0)
+        self._register(_DISPLAY_TEST, 0)
+        self._register(_SCAN_LIMIT, 7)
+        self._register(_DECODE_MODE, 0)
+        self._register(_SHUTDOWN, 1)
+        self.display_clear()
+        self.display_brightness(5)
 
         # Initialize beeper
         self.beeper = Pin(_BEEPER, Pin.OUT)
-        self.beeper_timer = Timer(2)
- 
-         # Initialize current number and current decimal points
+        self.beeper.value(1)
+
+        # Initialize current number and current decimal points
         self.current_num = None
         self.current_dp = 0b000000
 
@@ -182,20 +193,7 @@ class Atlas:
         self.sta_if = network.WLAN(network.STA_IF)
         self.rtc = RTC()
         self.timer = Timer(1)
-
-        for command, data in (
-            (_SHUTDOWN, 0),
-            (_SCAN_LIMIT, 7),
-            (_DECODE_MODE, 0xFF),
-            (_INTENSITY, 0xa),
-            (_SHUTDOWN, 1),
-        ):
-            self._register(command, data)
-
-        self.display_clear()
-        self.red_led.value(0)
-        self.green_led.value(0)
-        self.blue_led.value(0)
+        #self.curr_play = 0
 
     # Connect to wifi
     def connect_to_wifi(self, ssid, password):
@@ -306,17 +304,28 @@ class Atlas:
     def toggle_led(led):
         led.value(not (led.value()))
 
-    # Play a note
-    def play_note(self, freq, duration):
-        duration_timer = Timer(0)
-        self.beeper_timer.init(freq=freq, mode=Timer.PERIODIC, callback=self.beeper_callback)
-        duration_timer.init(period=duration, mode=Timer.ONE_SHOT, callback=lambda _:self.beeper_timer.deinit())
+#     # Play a note
+#     def play_note(self, freq, duration):
+#         duration_timer = Timer(0)
+#         self.beeper_timer.init(freq=freq, mode=Timer.PERIODIC, callback=self.beeper_callback)
+#         duration_timer.init(period=duration, mode=Timer.ONE_SHOT, callback=lambda _:self.beeper_timer.deinit())
+# 
+#     # Play a list of lists containing [note, duration]
+#     def play_song(self, notes):
+#         for note in notes:
+#             self.play_note(note[0], note[1])
 
-    # Play a list of lists containing [note, duration]
-    def play_song(self, notes):
-        for note in notes:
-            self.play_note(note[0], note[1])
-    
+    def play_note(self, freq):
+        self.note_timer.init(freq=freq, mode=Timer.PERIODIC, callback=self.beeper_callback)
+        
+    def stop_note(self):
+        self.note_timer.deinit()
+        self.beeper.value(1)
+        
+    # Callback for beeper
+    def beeper_callback(self, pin):
+        self.toggle_led(self.beeper)
+        
     # Increment the current number on the display
     def increment_num(self, hex=False):
         if self.current_num is None:
@@ -353,9 +362,7 @@ class Atlas:
 
                 self.write_num(self.current_num - 1, self.current_dp)
 
-    # Callback for beeper
-    def beeper_callback(self, pin):
-        self.toggle_led(self.beeper)
+    
 
     # Callback for Mode button
     def mode_button_callback(self, pin):
