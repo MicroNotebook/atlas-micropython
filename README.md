@@ -1,2 +1,3 @@
-# atlas-micropython
-Starter code for programming an Atlas kit with MicroPython.
+# Atlas Kit Micropython Code
+
+Code to help you quickly get started with the Atlas Kit.
